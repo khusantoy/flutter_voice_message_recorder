@@ -31,8 +31,8 @@ class _LiveAmplitudeBarState extends State<LiveAmplitudeBar> {
   void _syncBuffer(int count) {
     if (count == _barCount) return;
     _barCount = count;
-    while (_buffer.length > count) _buffer.removeFirst();
-    while (_buffer.length < count) _buffer.addFirst(0.0);
+    while (_buffer.length > count) { _buffer.removeFirst(); }
+    while (_buffer.length < count) { _buffer.addFirst(0.0); }
   }
 
   @override

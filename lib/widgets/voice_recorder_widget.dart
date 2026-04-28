@@ -1,4 +1,3 @@
-import 'package:audio_waveforms/audio_waveforms.dart' hide RecorderState;
 import 'package:flutter/material.dart';
 
 import '../controllers/voice_recorder_controller.dart';
@@ -132,13 +131,14 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
           onSend: _onSendPressed,
         );
       case RecorderState.previewing:
-        final player = _controller.previewPlayer;
         return _PreviewingView(
           elapsed: _controller.elapsed,
           isPlaying: _controller.isPreviewPlaying,
           busy: _controller.busy,
-          playerController: player,
+          waveformData: _controller.previewWaveformData,
+          progress: _controller.previewProgress,
           onTogglePlay: _controller.playPreview,
+          onSeek: _controller.seekPreview,
           onResume: _controller.resumeRecording,
           onDelete: _controller.deleteAll,
           onSend: _onSendPressed,
@@ -316,8 +316,10 @@ class _PreviewingView extends StatelessWidget {
     required this.elapsed,
     required this.isPlaying,
     required this.busy,
-    required this.playerController,
+    required this.waveformData,
+    required this.progress,
     required this.onTogglePlay,
+    required this.onSeek,
     required this.onResume,
     required this.onDelete,
     required this.onSend,
@@ -326,8 +328,10 @@ class _PreviewingView extends StatelessWidget {
   final Duration elapsed;
   final bool isPlaying;
   final bool busy;
-  final PlayerController? playerController;
+  final List<double> waveformData;
+  final double progress;
   final VoidCallback onTogglePlay;
+  final ValueChanged<double> onSeek;
   final VoidCallback onResume;
   final VoidCallback onDelete;
   final VoidCallback onSend;
@@ -349,9 +353,11 @@ class _PreviewingView extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: playerController == null
-                  ? const SizedBox(height: 40)
-                  : PreviewWaveformPlayer(controller: playerController!),
+              child: PreviewWaveformPlayer(
+                waveformData: waveformData,
+                progress: progress,
+                onSeek: onSeek,
+              ),
             ),
             const SizedBox(width: 10),
             RecordingTimer(duration: elapsed),

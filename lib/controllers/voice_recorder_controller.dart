@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
@@ -10,6 +10,7 @@ import '../models/voice_recording_result.dart';
 import '../services/audio_concat_service.dart';
 import '../services/recorder_permission.dart';
 import '../services/voice_recorder_service.dart';
+import '../services/waveform_extractor_service.dart';
 
 enum RecorderState { idle, recording, paused, previewing }
 
@@ -19,15 +20,18 @@ class VoiceRecorderController extends ChangeNotifier
     VoiceRecorderService? recorderService,
     AudioConcatService? concatService,
     RecorderPermission? permission,
+    WaveformExtractorService? waveformExtractor,
   })  : _recorder = recorderService ?? VoiceRecorderService(),
         _concat = concatService ?? AudioConcatService(),
-        _permission = permission ?? RecorderPermission() {
+        _permission = permission ?? RecorderPermission(),
+        _waveformExtractor = waveformExtractor ?? WaveformExtractorService() {
     WidgetsBinding.instance.addObserver(this);
   }
 
   final VoiceRecorderService _recorder;
   final AudioConcatService _concat;
   final RecorderPermission _permission;
+  final WaveformExtractorService _waveformExtractor;
 
   RecorderState _state = RecorderState.idle;
   RecorderState get state => _state;
@@ -35,13 +39,20 @@ class VoiceRecorderController extends ChangeNotifier
   final List<String> _segments = [];
   String? _mergedPreviewPath;
 
-  PlayerController? _previewPlayer;
-  PlayerController? get previewPlayer => _previewPlayer;
+  AudioPlayer? _previewPlayer;
 
   bool _isPreviewPlaying = false;
   bool get isPreviewPlaying => _isPreviewPlaying;
 
-  PlayerState _lastPlayerState = PlayerState.stopped;
+  bool _previewCompleted = false;
+
+  List<double> _previewWaveformData = [];
+  List<double> get previewWaveformData => _previewWaveformData;
+
+  double _previewProgress = 0.0;
+  double get previewProgress => _previewProgress;
+
+  Duration _previewDuration = Duration.zero;
 
   Duration _accumulated = Duration.zero;
   final Stopwatch _segmentWatch = Stopwatch();
@@ -49,6 +60,9 @@ class VoiceRecorderController extends ChangeNotifier
 
   StreamSubscription<Amplitude>? _ampSub;
   StreamSubscription<PlayerState>? _playerStateSub;
+  StreamSubscription<Duration>? _playerPositionSub;
+  StreamSubscription<Duration>? _playerDurationSub;
+
   double _amplitude = 0.0;
   double get amplitude => _amplitude;
 
@@ -152,28 +166,15 @@ class VoiceRecorderController extends ChangeNotifier
 
     if (_state == RecorderState.previewing && _previewPlayer != null) {
       if (_isPreviewPlaying) {
-        await _previewPlayer!.pausePlayer();
+        await _previewPlayer!.pause();
         return;
       }
-      // Audio stopped (completed) holatida player qaytadan tayyorlanadi
-      if (_lastPlayerState == PlayerState.stopped) {
-        _setBusy(true);
-        try {
-          await _previewPlayer!.preparePlayer(
-            path: _mergedPreviewPath!,
-            shouldExtractWaveform: false,
-            noOfSamples: 100,
-            volume: 1.0,
-          );
-          await _previewPlayer!.startPlayer();
-        } catch (e) {
-          _errorMessage = 'Eshitish yuklanmadi: $e';
-        } finally {
-          _setBusy(false);
-          notifyListeners();
-        }
+      if (_previewCompleted) {
+        _previewCompleted = false;
+        await _previewPlayer!.seek(Duration.zero);
+        await _previewPlayer!.resume();
       } else {
-        await _previewPlayer!.startPlayer();
+        await _previewPlayer!.resume();
       }
       return;
     }
@@ -188,23 +189,19 @@ class VoiceRecorderController extends ChangeNotifier
       );
       _mergedPreviewPath = mergedPath;
 
-      final player = PlayerController();
-      await player.preparePlayer(
-        path: mergedPath,
-        shouldExtractWaveform: true,
-        noOfSamples: 100,
-        volume: 1.0,
-      );
+      _previewWaveformData =
+          await _waveformExtractor.extract(mergedPath, sampleCount: 100);
+      _previewProgress = 0.0;
+      _previewDuration = Duration.zero;
+      _previewCompleted = false;
+
+      final player = AudioPlayer();
+      await player.setReleaseMode(ReleaseMode.stop);
       _previewPlayer = player;
 
-      _playerStateSub?.cancel();
-      _playerStateSub = player.onPlayerStateChanged.listen((ps) {
-        _isPreviewPlaying = ps.isPlaying;
-        _lastPlayerState = ps;
-        notifyListeners();
-      });
+      _subscribePlayerStreams(player);
 
-      await player.startPlayer();
+      await player.play(DeviceFileSource(mergedPath));
       _state = RecorderState.previewing;
     } catch (e) {
       _errorMessage = 'Eshitish yuklanmadi: $e';
@@ -212,6 +209,14 @@ class VoiceRecorderController extends ChangeNotifier
       _setBusy(false);
       notifyListeners();
     }
+  }
+
+  void seekPreview(double progress) {
+    if (_previewPlayer == null || _previewDuration == Duration.zero) return;
+    final pos = Duration(
+      milliseconds: (progress * _previewDuration.inMilliseconds).round(),
+    );
+    _previewPlayer!.seek(pos);
   }
 
   Future<void> deleteAll() async {
@@ -308,6 +313,33 @@ class VoiceRecorderController extends ChangeNotifier
     notifyListeners();
   }
 
+  void _subscribePlayerStreams(AudioPlayer player) {
+    _playerStateSub?.cancel();
+    _playerPositionSub?.cancel();
+    _playerDurationSub?.cancel();
+
+    _playerStateSub = player.onPlayerStateChanged.listen((ps) {
+      _isPreviewPlaying = ps == PlayerState.playing;
+      if (ps == PlayerState.completed) {
+        _previewCompleted = true;
+        _previewProgress = 1.0;
+      }
+      notifyListeners();
+    });
+
+    _playerDurationSub = player.onDurationChanged.listen((d) {
+      _previewDuration = d;
+    });
+
+    _playerPositionSub = player.onPositionChanged.listen((pos) {
+      if (_previewDuration.inMilliseconds > 0) {
+        _previewProgress =
+            (pos.inMilliseconds / _previewDuration.inMilliseconds).clamp(0.0, 1.0);
+        notifyListeners();
+      }
+    });
+  }
+
   void _startTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
@@ -331,17 +363,26 @@ class VoiceRecorderController extends ChangeNotifier
 
   Future<void> _tearDownPreview() async {
     await _playerStateSub?.cancel();
+    await _playerPositionSub?.cancel();
+    await _playerDurationSub?.cancel();
     _playerStateSub = null;
+    _playerPositionSub = null;
+    _playerDurationSub = null;
+
     final p = _previewPlayer;
     _previewPlayer = null;
     _isPreviewPlaying = false;
-    _lastPlayerState = PlayerState.stopped;
+    _previewCompleted = false;
+    _previewProgress = 0.0;
+    _previewWaveformData = [];
+    _previewDuration = Duration.zero;
+
     if (p != null) {
       try {
-        await p.stopPlayer();
+        await p.stop();
       } catch (_) {}
       try {
-        p.dispose();
+        await p.dispose();
       } catch (_) {}
     }
   }
@@ -365,7 +406,7 @@ class VoiceRecorderController extends ChangeNotifier
       if (_state == RecorderState.recording) {
         pauseRecording();
       } else if (_state == RecorderState.previewing && _isPreviewPlaying) {
-        _previewPlayer?.pausePlayer();
+        _previewPlayer?.pause();
       }
     }
   }
@@ -376,6 +417,8 @@ class VoiceRecorderController extends ChangeNotifier
     _ticker?.cancel();
     _ampSub?.cancel();
     _playerStateSub?.cancel();
+    _playerPositionSub?.cancel();
+    _playerDurationSub?.cancel();
     _previewPlayer?.dispose();
     _recorder.dispose();
     super.dispose();

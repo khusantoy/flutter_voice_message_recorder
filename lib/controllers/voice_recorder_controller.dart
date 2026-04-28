@@ -41,6 +41,8 @@ class VoiceRecorderController extends ChangeNotifier
   bool _isPreviewPlaying = false;
   bool get isPreviewPlaying => _isPreviewPlaying;
 
+  PlayerState _lastPlayerState = PlayerState.stopped;
+
   Duration _accumulated = Duration.zero;
   final Stopwatch _segmentWatch = Stopwatch();
   Timer? _ticker;
@@ -151,6 +153,25 @@ class VoiceRecorderController extends ChangeNotifier
     if (_state == RecorderState.previewing && _previewPlayer != null) {
       if (_isPreviewPlaying) {
         await _previewPlayer!.pausePlayer();
+        return;
+      }
+      // Audio stopped (completed) holatida player qaytadan tayyorlanadi
+      if (_lastPlayerState == PlayerState.stopped) {
+        _setBusy(true);
+        try {
+          await _previewPlayer!.preparePlayer(
+            path: _mergedPreviewPath!,
+            shouldExtractWaveform: false,
+            noOfSamples: 100,
+            volume: 1.0,
+          );
+          await _previewPlayer!.startPlayer();
+        } catch (e) {
+          _errorMessage = 'Eshitish yuklanmadi: $e';
+        } finally {
+          _setBusy(false);
+          notifyListeners();
+        }
       } else {
         await _previewPlayer!.startPlayer();
       }
@@ -179,6 +200,7 @@ class VoiceRecorderController extends ChangeNotifier
       _playerStateSub?.cancel();
       _playerStateSub = player.onPlayerStateChanged.listen((ps) {
         _isPreviewPlaying = ps.isPlaying;
+        _lastPlayerState = ps;
         notifyListeners();
       });
 
@@ -313,6 +335,7 @@ class VoiceRecorderController extends ChangeNotifier
     final p = _previewPlayer;
     _previewPlayer = null;
     _isPreviewPlaying = false;
+    _lastPlayerState = PlayerState.stopped;
     if (p != null) {
       try {
         await p.stopPlayer();

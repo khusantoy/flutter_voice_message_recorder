@@ -27,8 +27,8 @@ class PreviewWaveformPlayer extends StatelessWidget {
             liveWaveColor: cs.primary,
             seekLineColor: cs.primary,
             showSeekLine: true,
-            waveThickness: 2.5,
-            spacing: 5,
+            waveThickness: 3.0,
+            spacing: 4.5,
           ),
         );
       },

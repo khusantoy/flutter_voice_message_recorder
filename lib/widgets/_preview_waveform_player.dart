@@ -56,9 +56,9 @@ class _WaveformPainter extends CustomPainter {
   final Color playedColor;
   final Color unplayedColor;
 
-  static const double _barWidth = 3.0;
-  static const double _gap = 4.5;
-  static const double _minBarHeight = 3.0;
+  static const double _barWidth = 2.0;
+  static const double _gap = 1.5;
+  static const double _minBarHeight = 2.0;
 
   static int _barCount(double width) =>
       ((width + _gap) / (_barWidth + _gap)).floor().clamp(1, 500);

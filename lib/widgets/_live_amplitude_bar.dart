@@ -19,8 +19,8 @@ class LiveAmplitudeBar extends StatefulWidget {
 }
 
 class _LiveAmplitudeBarState extends State<LiveAmplitudeBar> {
-  static const double _barWidth = 3.0;
-  static const double _gap = 4.5;
+  static const double _barWidth = 2.0;
+  static const double _gap = 1.5;
 
   final Queue<double> _buffer = Queue<double>();
   int _barCount = 0;
@@ -76,8 +76,8 @@ class _AmpPainter extends CustomPainter {
   final List<double> values;
   final Color color;
 
-  static const double _barWidth = 3.0;
-  static const double _gap = 4.5;
+  static const double _barWidth = 2.0;
+  static const double _gap = 1.5;
 
   @override
   void paint(Canvas canvas, Size size) {

@@ -10,6 +10,7 @@ import '../models/voice_recording_result.dart';
 import '../services/audio_concat_service.dart';
 import '../services/recorder_permission.dart';
 import '../services/voice_recorder_service.dart';
+import '../services/waveform_cache_service.dart';
 import '../services/waveform_extractor_service.dart';
 
 enum RecorderState { idle, recording, paused, previewing }
@@ -190,7 +191,7 @@ class VoiceRecorderController extends ChangeNotifier
       _mergedPreviewPath = mergedPath;
 
       _previewWaveformData =
-          await _waveformExtractor.extract(mergedPath, sampleCount: 100);
+          await _waveformExtractor.extract(mergedPath, sampleCount: 200);
       _previewProgress = 0.0;
       _previewDuration = Duration.zero;
       _previewCompleted = false;
@@ -282,8 +283,19 @@ class VoiceRecorderController extends ChangeNotifier
         outputPath: finalPath,
       );
 
-      final result =
-          VoiceRecordingResult(filePath: finalPath, duration: _accumulated);
+      var waveform = _previewWaveformData;
+      if (waveform.isEmpty) {
+        try {
+          waveform = await _waveformExtractor.extract(finalPath, sampleCount: 200);
+        } catch (_) {}
+      }
+      await WaveformCacheService.instance.set(finalPath, waveform);
+
+      final result = VoiceRecordingResult(
+        filePath: finalPath,
+        duration: _accumulated,
+        waveformData: waveform,
+      );
 
       for (final p in _segments) {
         await _safeDelete(p);

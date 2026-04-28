@@ -111,6 +111,7 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
       case RecorderState.idle:
         return _IdleView(
           onStart: _controller.startRecording,
+          onCancel: widget.onCancelled,
           busy: _controller.busy,
         );
       case RecorderState.recording:
@@ -148,9 +149,14 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
 }
 
 class _IdleView extends StatelessWidget {
-  const _IdleView({required this.onStart, required this.busy});
+  const _IdleView({
+    required this.onStart,
+    required this.busy,
+    this.onCancel,
+  });
 
   final VoidCallback onStart;
+  final VoidCallback? onCancel;
   final bool busy;
 
   @override
@@ -159,6 +165,16 @@ class _IdleView extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (onCancel != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              icon: Icon(Icons.close_rounded, color: cs.onSurfaceVariant),
+              onPressed: onCancel,
+              tooltip: 'Yopish',
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
         Material(
           color: cs.primary,
           shape: const CircleBorder(),

@@ -21,7 +21,7 @@ class PreviewWaveformPlayer extends StatelessWidget {
           playerController: controller,
           enableSeekGesture: true,
           waveformType: WaveformType.fitWidth,
-          continuousWaveform: true,
+          continuousWaveform: false,
           playerWaveStyle: PlayerWaveStyle(
             fixedWaveColor: cs.outlineVariant,
             liveWaveColor: cs.primary,

@@ -6,6 +6,7 @@ A production-grade voice message recorder and chat bubble player for Flutter, bu
 - **Mid-recording preview with a real waveform** — extracted from the actual audio via FFmpeg PCM decoding, not a fake animation.
 - **Playable chat bubbles** — each sent message renders as a scrubbable waveform bubble with play/pause, live position counter, and timestamp.
 - **Local *and* network audio** — the same bubble handles a freshly recorded file or a remote URL. Downloads stream with progress, cancel, and on-disk caching (cached_network_image style).
+- **Per-chat cache, wipeable on demand** — every `VoiceMessage` carries a `chatId`; audio files and waveforms are stored under that scope and `clearChat(chatId)` evicts both in one call (no orphaned files when a chat is deleted).
 - **Waveform cache** — extracted waveform data is persisted to disk so it never needs to be re-computed. Server-supplied waveforms (Telegram-style metadata) are honored and skip extraction entirely.
 - **M4A (AAC-LC)** output — the standard chat voice-message format.
 - **Theme-agnostic widgets.** No `Theme.of(context)` lookups inside the public widgets — colors are passed explicitly through `VoiceBubbleStyle` / `VoiceRecorderStyle`. Drop the widgets into any app (Material, Cupertino, or your own design system) without colour leakage.
@@ -38,7 +39,8 @@ The result: the user can pause, preview, resume, preview again, resume, delete, 
 | Send as a playable chat bubble with waveform + seek | ✓ |
 | Remote voice messages from a URL (`VoiceMessage.remote`) | ✓ |
 | User-triggered download with progress (%, MB/MB) and cancel | ✓ |
-| On-disk audio cache (`voice_cache/<sha1>.<ext>`) — no re-downloads | ✓ |
+| On-disk audio cache (`voice_cache/<chatId>/<sha1>.<ext>`) — no re-downloads | ✓ |
+| Per-chat cache wipe (`voiceCache.clearChat` / `waveformCache.clearChat`) | ✓ |
 | Server-supplied waveform metadata honored (Telegram-style) | ✓ |
 | Duration-adaptive bubble width (short audio → narrow, long → wide) | ✓ |
 | Exclusive playback (only one bubble plays at a time, identity-based) | ✓ |
@@ -145,6 +147,7 @@ Drop `VoiceRecorderWidget` into any screen. State, permissions, and cleanup are 
 
 ```dart
 VoiceRecorderWidget(
+  chatId: 'chat-42',   // scopes the recording's waveform cache to this chat
   onRecorded: (VoiceMessage message) {
     // message.source     → LocalAudioSource(path)
     // message.duration   → total recorded Duration
@@ -189,6 +192,7 @@ VoiceMessageBubble(message: result);
 // Remote — coming from your chat backend:
 VoiceMessageBubble(
   message: VoiceMessage.remote(
+    chatId: 'chat-42',
     url: serverMessage.audioUrl,
     duration: serverMessage.duration,
     waveform: Waveform(serverMessage.waveformBars), // optional but recommended
@@ -263,6 +267,7 @@ VoiceMessageBubble(
 
 ```dart
 class VoiceMessage {
+  final String chatId;        // scopes both audio and waveform caches
   final AudioSource source;   // sealed: LocalAudioSource | RemoteAudioSource
   final Duration duration;
   final Waveform waveform;    // immutable, 0..1 clamped
@@ -270,11 +275,25 @@ class VoiceMessage {
 }
 
 // Factories
-VoiceMessage.local(path: ..., duration: ..., waveform: ...);
-VoiceMessage.remote(url: ..., duration: ..., waveform: ...);
+VoiceMessage.local(chatId: ..., path: ..., duration: ..., waveform: ...);
+VoiceMessage.remote(chatId: ..., url: ..., duration: ..., waveform: ...);
 ```
 
+`chatId` is required on every message. It does not appear in the rendered UI — it is purely the cache partition key so that `clearChat(chatId)` can wipe everything belonging to a deleted conversation without touching other chats.
+
 `Waveform` is a value object. Pass server-computed bars straight through — the bubble will use them instead of re-extracting on download (saves an FFmpeg pass).
+
+### Clearing a chat's cache
+
+When the user deletes a conversation, evict both caches in one place:
+
+```dart
+final deps = AppDependenciesScope.of(context);
+await deps.voiceCache.clearChat(chatId);     // deletes voice_cache/<chatId>/
+await deps.waveformCache.clearChat(chatId);  // removes "<chatId> *" keys from the JSON map
+```
+
+The demo app wires this to the chat AppBar's overflow menu (`⋮ → Chatni o'chirish`).
 
 ---
 
@@ -372,7 +391,7 @@ This gives a consistent waveform regardless of which audio player is used.
 
 ### Waveform cache
 
-`JsonFileWaveformCache` backs `.waveform_cache.json` in the app documents directory. Waveform data is keyed by file path and loaded lazily on first use.
+`JsonFileWaveformCache` backs `.waveform_cache.json` in the app documents directory. Each entry is keyed by `"<chatId> <key>"` (composite key, space-separated), so wiping a chat is a prefix filter; other chats are untouched. Loaded lazily on first use.
 
 ```
 send message
@@ -387,7 +406,16 @@ open bubble
 
 ### Network audio cache (cached_network_image style)
 
-Remote audio uses on-disk caching keyed by a sha1 hash of the URL — no JSON index, no SQLite. File existence on disk *is* the cache.
+Remote audio uses on-disk caching keyed by a sha1 hash of the URL, partitioned by `chatId` — no JSON index, no SQLite. File existence on disk *is* the cache.
+
+```
+<appDocs>/voice_cache/
+├── chat-42/
+│   ├── a3f5…e91.mp3
+│   └── b7c2…d44.m4a
+└── chat-99/
+    └── …
+```
 
 ```
 tap download
@@ -398,7 +426,7 @@ tap download
               └─ error   → delete .part → Error (retry)
 ```
 
-Restarting the app does not lose the cache: `voice_cache/<sha1>.<ext>` survives. The bubble auto-detects this on first build and skips straight to the play state.
+Restarting the app does not lose the cache: `voice_cache/<chatId>/<sha1>.<ext>` survives. The bubble auto-detects this on first build and skips straight to the play state. Deleting a chat removes the entire `voice_cache/<chatId>/` directory in one `recursive: true` call — no per-URL bookkeeping required.
 
 ### Module boundaries (ports & adapters)
 
@@ -421,7 +449,7 @@ lib/
     audio_concat_ffmpeg.dart         FFmpeg concat demuxer
     waveform_extractor_ffmpeg.dart   FFmpeg → PCM → RMS → Waveform
     waveform_cache_json.dart         on-disk JSON map
-    voice_message_cache_fs.dart      sha1(url) → file on disk
+    voice_message_cache_fs.dart      voice_cache/<chatId>/sha1(url).<ext>
     voice_message_downloader_dio.dart dio download with progress + cancel
     mic_permission_handler.dart      permission_handler adapter
     voice_paths.dart                 path_provider-backed paths
@@ -458,7 +486,7 @@ The dependency direction is strict: `presentation → application → domain`, a
 - **No swipe-to-cancel gesture.** Mic is tap-to-toggle. Swipe-to-cancel can be added with a `GestureDetector` around the idle mic button.
 - **No upload pipeline.** The widget emits a `VoiceMessage` with a local file path; uploading to a backend is intentionally out of scope.
 - **In-memory message list.** The demo app stores messages in a `List` — they are lost on restart. The on-disk audio cache and waveform cache *do* survive, so wiring up a local DB (drift, sqflite, isar) for the message list is a small, isolated addition.
-- **No cache eviction policy.** Downloaded files stay in `voice_cache/` forever. Add an LRU sweeper if footprint matters.
+- **No size-based eviction.** Per-chat eviction is supported (`clearChat(chatId)`), but there is no LRU sweeper for global cache footprint. Add one if disk usage matters in your app.
 - **Emulator microphones** on both platforms are unreliable. Test on a real device.
 
 ---

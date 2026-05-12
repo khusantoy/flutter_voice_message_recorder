@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../domain/voice_message.dart';
 import '../domain/waveform.dart';
+import 'app_dependencies.dart';
 import 'voice_message_bubble.dart';
 import 'voice_recorder_widget.dart';
 
@@ -15,18 +16,17 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  static const String _chatId = 'demo-chat-1';
+
   late final ValueNotifier<List<VoiceMessage>> _messages;
   final ScrollController _scroll = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    // Demo seed: keshlashni sinab ko'rish uchun bitta ochiq sample audio.
-    // Server odatda waveform metadata'ni xabar bilan birga yuboradi (Telegram uslubi)
-    // — shu yerda uni simulyatsiya qilamiz, shunda bubble darhol "haqiqiy ko'rinishli"
-    // to'lqinlarni ko'rsatadi, yuklab olish kutilmaydi.
     _messages = ValueNotifier<List<VoiceMessage>>([
       VoiceMessage.remote(
+        chatId: _chatId,
         url: 'https://samplelib.com/mp3/sample-15s.mp3',
         duration: const Duration(seconds: 15),
         waveform: _fakeServerWaveform(seed: 42, count: 80),
@@ -46,6 +46,34 @@ class _ChatPageState extends State<ChatPage> {
     _messages.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  Future<void> _confirmClearChat(BuildContext context) async {
+    final deps = AppDependenciesScope.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Chatni o\'chirish'),
+        content: const Text(
+          'Bu chatdagi barcha xabarlar va keshlangan ovozli fayllar o\'chiriladi. Davom etilsinmi?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Bekor qilish'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('O\'chirish'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await deps.voiceCache.clearChat(_chatId);
+    await deps.waveformCache.clearChat(_chatId);
+    _messages.value = const [];
   }
 
   void _onRecorded(VoiceMessage message) {
@@ -117,9 +145,23 @@ class _ChatPageState extends State<ChatPage> {
             onPressed: () {},
             tooltip: 'Qo\'ng\'iroq',
           ),
-          IconButton(
+          PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded),
-            onPressed: () {},
+            onSelected: (v) {
+              if (v == 'clear') _confirmClearChat(context);
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'clear',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline_rounded, size: 20),
+                    SizedBox(width: 10),
+                    Text('Chatni o\'chirish'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -145,7 +187,11 @@ class _ChatPageState extends State<ChatPage> {
               },
             ),
           ),
-          _InputBar(onRecorded: _onRecorded, bottomPadding: mq.padding.bottom),
+          _InputBar(
+            chatId: _chatId,
+            onRecorded: _onRecorded,
+            bottomPadding: mq.padding.bottom,
+          ),
         ],
       ),
     );
@@ -153,8 +199,13 @@ class _ChatPageState extends State<ChatPage> {
 }
 
 class _InputBar extends StatefulWidget {
-  const _InputBar({required this.onRecorded, required this.bottomPadding});
+  const _InputBar({
+    required this.chatId,
+    required this.onRecorded,
+    required this.bottomPadding,
+  });
 
+  final String chatId;
   final ValueChanged<VoiceMessage> onRecorded;
   final double bottomPadding;
 
@@ -188,6 +239,7 @@ class _InputBarState extends State<_InputBar> {
         builder: (context, show, _) {
           if (show) {
             return VoiceRecorderWidget(
+              chatId: widget.chatId,
               onRecorded: (r) {
                 _showRecorder.value = false;
                 widget.onRecorded(r);

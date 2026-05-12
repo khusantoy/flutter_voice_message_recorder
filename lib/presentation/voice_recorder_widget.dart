@@ -13,12 +13,15 @@ import 'widgets/waveform_player.dart';
 class VoiceRecorderWidget extends StatefulWidget {
   const VoiceRecorderWidget({
     super.key,
+    required this.chatId,
     required this.onRecorded,
     this.onCancelled,
     this.onFailure,
     this.style = const VoiceRecorderStyle(),
     this.labels = const VoiceRecorderLabels(),
   });
+
+  final String chatId;
 
   final ValueChanged<VoiceMessage> onRecorded;
   final VoidCallback? onCancelled;
@@ -70,7 +73,7 @@ class _VoiceRecorderWidgetState extends State<VoiceRecorderWidget> {
   }
 
   Future<void> _onSendPressed() async {
-    final result = await _controller!.finalizeAndSend();
+    final result = await _controller!.finalizeAndSend(chatId: widget.chatId);
     if (result != null && mounted) {
       widget.onRecorded(result);
     }

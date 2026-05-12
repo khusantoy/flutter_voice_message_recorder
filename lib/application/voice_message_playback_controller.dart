@@ -91,7 +91,7 @@ class VoiceMessagePlaybackController extends ChangeNotifier
         _state = const BubbleReady();
         notifyListeners();
       case RemoteAudioSource(:final url):
-        final cached = await cache.getIfCached(url);
+        final cached = await cache.getIfCached(chatId: message.chatId, url: url);
         if (cached != null) {
           _localPath = cached;
           await _ensureWaveform(cached);
@@ -105,7 +105,7 @@ class VoiceMessagePlaybackController extends ChangeNotifier
 
   Future<void> _ensureWaveform(String key) async {
     if (!_waveform.isEmpty) return;
-    final cached = await waveformCache.get(key);
+    final cached = await waveformCache.get(chatId: message.chatId, key: key);
     if (cached != null) {
       _waveform = cached;
       return;
@@ -116,7 +116,11 @@ class VoiceMessagePlaybackController extends ChangeNotifier
         sampleCount: config.bubbleWaveformSampleCount,
       );
       _waveform = extracted;
-      await waveformCache.set(key, extracted);
+      await waveformCache.set(
+        chatId: message.chatId,
+        key: key,
+        waveform: extracted,
+      );
     } catch (_) {}
   }
 
@@ -128,7 +132,10 @@ class VoiceMessagePlaybackController extends ChangeNotifier
     _state = const BubbleDownloading(DownloadProgress(received: 0, total: 0));
     notifyListeners();
 
-    final dest = await cache.cachedPathFor(source.url);
+    final dest = await cache.cachedPathFor(
+      chatId: message.chatId,
+      url: source.url,
+    );
     final handle = downloader.download(url: source.url, destinationPath: dest);
     _downloadHandle = handle;
 

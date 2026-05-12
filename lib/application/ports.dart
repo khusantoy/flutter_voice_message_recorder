@@ -32,9 +32,14 @@ abstract interface class MicPermissionPort {
 }
 
 abstract interface class WaveformCachePort {
-  Future<Waveform?> get(String key);
-  Future<void> set(String key, Waveform waveform);
-  Future<void> remove(String key);
+  Future<Waveform?> get({required String chatId, required String key});
+  Future<void> set({
+    required String chatId,
+    required String key,
+    required Waveform waveform,
+  });
+  Future<void> remove({required String chatId, required String key});
+  Future<void> clearChat(String chatId);
 }
 
 class DownloadProgress {
@@ -85,9 +90,10 @@ abstract interface class VoiceMessageDownloaderPort {
 }
 
 abstract interface class VoiceMessageCachePort {
-  Future<String> cachedPathFor(String url);
-  Future<String?> getIfCached(String url);
-  Future<void> remove(String url);
+  Future<String> cachedPathFor({required String chatId, required String url});
+  Future<String?> getIfCached({required String chatId, required String url});
+  Future<void> remove({required String chatId, required String url});
+  Future<void> clearChat(String chatId);
 }
 
 abstract interface class VoicePathsPort {

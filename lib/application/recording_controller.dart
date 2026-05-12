@@ -198,7 +198,7 @@ class RecordingController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<VoiceMessage?> finalizeAndSend() async {
+  Future<VoiceMessage?> finalizeAndSend({required String chatId}) async {
     if (_busy) return null;
     _setBusy(true);
     try {
@@ -237,9 +237,14 @@ class RecordingController extends ChangeNotifier with WidgetsBindingObserver {
           waveform = Waveform.empty();
         }
       }
-      await waveformCache.set(finalPath, waveform);
+      await waveformCache.set(
+        chatId: chatId,
+        key: finalPath,
+        waveform: waveform,
+      );
 
       final message = VoiceMessage.local(
+        chatId: chatId,
         path: finalPath,
         duration: _accumulated,
         waveform: waveform,

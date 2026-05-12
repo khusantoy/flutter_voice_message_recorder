@@ -3,6 +3,7 @@ import 'waveform.dart';
 
 class VoiceMessage {
   VoiceMessage({
+    required this.chatId,
     required this.source,
     required this.duration,
     Waveform? waveform,
@@ -11,12 +12,14 @@ class VoiceMessage {
         sentAt = sentAt ?? DateTime.now();
 
   factory VoiceMessage.local({
+    required String chatId,
     required String path,
     required Duration duration,
     Waveform? waveform,
     DateTime? sentAt,
   }) =>
       VoiceMessage(
+        chatId: chatId,
         source: LocalAudioSource(path),
         duration: duration,
         waveform: waveform,
@@ -24,18 +27,21 @@ class VoiceMessage {
       );
 
   factory VoiceMessage.remote({
+    required String chatId,
     required String url,
     required Duration duration,
     Waveform? waveform,
     DateTime? sentAt,
   }) =>
       VoiceMessage(
+        chatId: chatId,
         source: RemoteAudioSource(url),
         duration: duration,
         waveform: waveform,
         sentAt: sentAt,
       );
 
+  final String chatId;
   final AudioSource source;
   final Duration duration;
   final Waveform waveform;

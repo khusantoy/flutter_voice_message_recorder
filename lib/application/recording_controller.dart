@@ -320,9 +320,20 @@ class RecordingController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
     _ampSub?.cancel();
+    final orphans = List<String>.of(_segments);
+    final preview = _preview.mergedPathForCleanup;
+    _segments.clear();
     _preview.removeListener(notifyListeners);
     _preview.dispose();
     recorder.dispose();
+    // Discard any unsent segments + leftover preview file. Closing the
+    // recorder without "Send" is treated as cancel — keeping them would
+    // leak orphan files in app docs every time the user backs out
+    // mid-recording.
+    for (final p in orphans) {
+      safeDeleteFile(p);
+    }
+    if (preview != null) safeDeleteFile(preview);
     super.dispose();
   }
 }

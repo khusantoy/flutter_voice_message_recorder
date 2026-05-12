@@ -283,6 +283,21 @@ VoiceMessage.remote(chatId: ..., url: ..., duration: ..., waveform: ...);
 
 `Waveform` is a value object. Pass server-computed bars straight through — the bubble will use them instead of re-extracting on download (saves an FFmpeg pass).
 
+#### Server-supplied waveforms (recommended for chat backends)
+
+Telegram, WhatsApp, and most production chat platforms ship a small array of pre-computed waveform bars (≈40–100 floats in `0..1`) inside the message metadata, so the bars render the moment the message arrives — before the audio file is even downloaded. To use them here, populate `VoiceMessage.remote(waveform: ...)`:
+
+```dart
+VoiceMessage.remote(
+  chatId: chatId,
+  url: serverMessage.audioUrl,
+  duration: serverMessage.duration,
+  waveform: Waveform(serverMessage.waveformBars), // server-supplied
+);
+```
+
+The demo app in this repo intentionally **does not** fabricate fake bars in its seed — it constructs a `VoiceMessage.remote` *without* a `waveform`, so you can observe the real fallback behaviour: a flat placeholder until download, then on-device FFmpeg extraction. Wire your backend's metadata into the `waveform:` argument as shown above to skip extraction entirely.
+
 ### Clearing a chat's cache
 
 When the user deletes a conversation, evict both caches in one place:

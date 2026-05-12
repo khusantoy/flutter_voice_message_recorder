@@ -1,9 +1,6 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 
 import '../domain/voice_message.dart';
-import '../domain/waveform.dart';
 import 'app_dependencies.dart';
 import 'voice_message_bubble.dart';
 import 'voice_recorder_widget.dart';
@@ -25,20 +22,23 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _messages = ValueNotifier<List<VoiceMessage>>([
+      // Demo seed: a single remote voice message.
+      //
+      // In a real chat backend the server should send pre-computed waveform
+      // bars alongside the message (Telegram-style metadata) — pass them via
+      // `waveform: Waveform(serverMessage.waveformBars)` here. When that field
+      // is non-empty the bubble renders the bars immediately, even before
+      // download starts, and skips the on-device FFmpeg extraction pass.
+      //
+      // Omitting `waveform:` (as below) is the conservative default: the
+      // bubble shows a flat placeholder until the audio is downloaded, then
+      // extracts and caches the waveform locally.
       VoiceMessage.remote(
         chatId: _chatId,
         url: 'https://samplelib.com/mp3/sample-15s.mp3',
         duration: const Duration(seconds: 15),
-        waveform: _fakeServerWaveform(seed: 42, count: 80),
       ),
     ]);
-  }
-
-  Waveform _fakeServerWaveform({required int seed, required int count}) {
-    final rng = Random(seed);
-    return Waveform(
-      List<double>.generate(count, (_) => 0.15 + rng.nextDouble() * 0.85),
-    );
   }
 
   @override

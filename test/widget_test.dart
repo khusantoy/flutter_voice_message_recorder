@@ -1,15 +1,19 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:recording/main.dart';
+import 'package:recording/domain/waveform.dart';
 
 void main() {
-  testWidgets('Demo page renders empty state initially', (tester) async {
-    await tester.pumpWidget(const VoiceRecorderDemoApp());
-    await tester.pump();
+  test('Waveform.flat returns zero-filled samples', () {
+    final w = Waveform.flat(5);
+    expect(w.length, 5);
+    expect(w.samples, [0.0, 0.0, 0.0, 0.0, 0.0]);
+  });
 
-    expect(find.text('Voice Recorder'), findsOneWidget);
-    expect(find.text('Hali ovozli xabar yo\'q'), findsOneWidget);
-    expect(find.byIcon(Icons.mic), findsOneWidget);
+  test('Waveform clamps values to 0..1', () {
+    final w = Waveform([-0.5, 0.25, 1.5]);
+    expect(w.samples, [0.0, 0.25, 1.0]);
+  });
+
+  test('Waveform.empty is empty', () {
+    expect(Waveform.empty().isEmpty, true);
   });
 }

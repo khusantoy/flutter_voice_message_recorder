@@ -5,9 +5,12 @@ A production-grade voice message recorder and chat bubble player for Flutter, bu
 - **True pause / resume** — tap pause, listen back, resume, listen again. As many times as you want.
 - **Mid-recording preview with a real waveform** — extracted from the actual audio via FFmpeg PCM decoding, not a fake animation.
 - **Playable chat bubbles** — each sent message renders as a scrubbable waveform bubble with play/pause, live position counter, and timestamp.
-- **Waveform cache** — extracted waveform data is persisted to disk so it never needs to be re-computed.
+- **Local *and* network audio** — the same bubble handles a freshly recorded file or a remote URL. Downloads stream with progress, cancel, and on-disk caching (cached_network_image style).
+- **Waveform cache** — extracted waveform data is persisted to disk so it never needs to be re-computed. Server-supplied waveforms (Telegram-style metadata) are honored and skip extraction entirely.
 - **M4A (AAC-LC)** output — the standard chat voice-message format.
-- **Material 3** UI, follows `ColorScheme` automatically.
+- **Theme-agnostic widgets.** No `Theme.of(context)` lookups inside the public widgets — colors are passed explicitly through `VoiceBubbleStyle` / `VoiceRecorderStyle`. Drop the widgets into any app (Material, Cupertino, or your own design system) without colour leakage.
+- **`ListenableBuilder` based.** Public widgets contain zero `setState` calls — reactivity flows through the controllers' `ChangeNotifier` and only the affected subtree rebuilds.
+- **Ports & adapters architecture** — every device dependency (recorder, ffmpeg, dio, permission handler, filesystem) sits behind a Dart interface, so swapping implementations or unit-testing controllers requires no real I/O.
 
 ---
 
@@ -33,13 +36,18 @@ The result: the user can pause, preview, resume, preview again, resume, delete, 
 | Pause at any point, resume from the same position | ✓ |
 | Preview the recording during pause with a scrubbable waveform | ✓ |
 | Send as a playable chat bubble with waveform + seek | ✓ |
+| Remote voice messages from a URL (`VoiceMessage.remote`) | ✓ |
+| User-triggered download with progress (%, MB/MB) and cancel | ✓ |
+| On-disk audio cache (`voice_cache/<sha1>.<ext>`) — no re-downloads | ✓ |
+| Server-supplied waveform metadata honored (Telegram-style) | ✓ |
 | Duration-adaptive bubble width (short audio → narrow, long → wide) | ✓ |
-| Exclusive playback (only one bubble plays at a time) | ✓ |
+| Exclusive playback (only one bubble plays at a time, identity-based) | ✓ |
 | Waveform cache persisted to disk (no re-extraction on restart) | ✓ |
 | Delete the in-progress recording and reset | ✓ |
 | Live amplitude visualization while recording | ✓ |
 | Auto-pause when the app goes to background | ✓ |
 | Mic permission flow (grant / denied / permanently denied → settings) | ✓ |
+| Typed failures (`sealed RecorderFailure`) — no stringly-typed errors | ✓ |
 
 ---
 
@@ -63,6 +71,8 @@ dependencies:
   path_provider: ^2.1.5
   permission_handler: ^12.0.1
   ffmpeg_kit_flutter_new: ^4.1.0
+  dio: ^5.7.0      # network audio download with progress + cancel
+  crypto: ^3.0.6   # sha1 hashing for cache file names
 ```
 
 ```bash
@@ -104,50 +114,167 @@ platform :ios, '14.0'
 
 ## Usage
 
+### Wire up dependencies once at startup
+
+Every widget pulls its collaborators (recorder, ffmpeg, dio, cache, permission handler) from an `AppDependencies` instance exposed through an `InheritedWidget`. Build it once in `main()`:
+
+```dart
+void main() {
+  runApp(VoiceRecorderDemoApp(dependencies: AppDependencies()));
+}
+
+class VoiceRecorderDemoApp extends StatelessWidget {
+  const VoiceRecorderDemoApp({super.key, required this.dependencies});
+  final AppDependencies dependencies;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppDependenciesScope(
+      dependencies: dependencies,
+      child: MaterialApp(home: const ChatPage()),
+    );
+  }
+}
+```
+
+`AppDependencies()` ships with sensible default adapters (record, audioplayers, FFmpegKit, dio, permission_handler, app-docs filesystem). Override any of them in tests or alternate environments by passing constructor parameters.
+
 ### Recorder widget
 
-Drop `VoiceRecorderWidget` into any screen. State, permissions, and cleanup are all handled internally.
+Drop `VoiceRecorderWidget` into any screen. State, permissions, and cleanup are all handled internally. Colours come from an explicit `VoiceRecorderStyle` — defaults match a Material 3 deepPurple palette but nothing is read from `Theme.of(context)`.
 
 ```dart
 VoiceRecorderWidget(
-  onRecorded: (VoiceRecordingResult result) {
-    // result.filePath      → absolute path to the final .m4a
-    // result.duration      → total recorded Duration
-    // result.waveformData  → List<double> (0.0–1.0), ready to render
-    // result.sentAt        → DateTime the message was finalized
+  onRecorded: (VoiceMessage message) {
+    // message.source     → LocalAudioSource(path)
+    // message.duration   → total recorded Duration
+    // message.waveform   → Waveform (immutable, samples clamped to 0..1)
+    // message.sentAt     → DateTime the message was finalized
   },
   onCancelled: () {
     // fired when the user discards the recording
   },
+  onFailure: (RecorderFailure failure) {
+    // sealed: PermissionDenied | PermissionBlocked | EncodingFailed
+    //       | StorageError    | UnknownRecorderFailure
+    // Show a SnackBar, banner, or whatever your app uses.
+  },
+  style: const VoiceRecorderStyle(
+    primaryColor: Color(0xFF128C7E),  // WhatsApp green, for example
+    // …all other colours are optional
+  ),
+  labels: const VoiceRecorderLabels.en(),  // or supply your own translations
 )
 ```
 
-### Chat bubble
-
-`VoiceMessageBubble` is a self-contained playback widget. Pass a shared `ValueNotifier<String?>` across all bubbles so only one plays at a time.
+`VoiceRecorderLabels` exposes every user-visible string in the recorder:
 
 ```dart
-final ValueNotifier<String?> playingPath = ValueNotifier(null);
+const VoiceRecorderLabels(
+  tapToRecord: 'Tap to record',
+  pausedBadge: 'Paused',
+  resumeButton: 'Resume',
+  sendButton: 'Send',
+)
+```
 
-// in your list builder:
+### Chat bubble — local or remote
+
+`VoiceMessageBubble` accepts a single `VoiceMessage`. The bubble decides at runtime whether to render the local-playback UI or the download/progress/play UI based on the message's `AudioSource` and the on-disk cache.
+
+```dart
+// Local — newly recorded:
+VoiceMessageBubble(message: result);
+
+// Remote — coming from your chat backend:
 VoiceMessageBubble(
-  recording: result,
-  playingNotifier: playingPath,
-)
+  message: VoiceMessage.remote(
+    url: serverMessage.audioUrl,
+    duration: serverMessage.duration,
+    waveform: Waveform(serverMessage.waveformBars), // optional but recommended
+  ),
+  style: const VoiceBubbleStyle(
+    bubbleColor: Color(0xFFDCF8C6),    // outgoing-bubble green
+    primaryColor: Color(0xFF128C7E),
+  ),
+);
 ```
 
-The bubble manages its own `AudioPlayer`, subscribes to position and state streams, and pauses itself whenever `playingNotifier` changes to a different file path.
+Only one bubble plays at a time. The exclusivity is enforced by the shared `PlaybackCoordinator` inside `AppDependencies` — no manual `ValueNotifier` plumbing.
 
-### `VoiceRecordingResult`
+### Theming
+
+There is no `Theme.of(context)` lookup inside either widget. Every colour and corner radius is taken from the `style:` parameter, and the default style is a self-contained `const` value — so the widgets are fully usable under `WidgetsApp`, `CupertinoApp`, or any custom root.
 
 ```dart
-class VoiceRecordingResult {
-  final String filePath;         // absolute path to the final .m4a
-  final Duration duration;       // sum of all recorded segments
-  final List<double> waveformData; // normalized RMS samples (0.0–1.0)
-  final DateTime sentAt;         // timestamp when the message was finalized
+class VoiceBubbleStyle {
+  Color bubbleColor;            // bubble background
+  Color primaryColor;           // play button, played waveform, progress ring
+  Color onPrimaryColor;         // icons on top of primary
+  Color waveformUnplayedColor;  // unplayed bars + ring track
+  Color textColor;
+  Color subtitleColor;          // duration / progress text
+  Color errorColor;
+  BorderRadius borderRadius;
+  TextStyle? subtitleTextStyle;  // override font for progress/duration text
+  TextStyle? timestampTextStyle; // override font for the time stamp
+}
+
+class VoiceRecorderStyle {
+  Color surfaceColor;           // recorder card background
+  Color primaryColor;           // mic / send buttons
+  Color onPrimaryColor;
+  Color tonalColor;             // secondary button background (pause, resume)
+  Color onTonalColor;
+  Color textColor;
+  Color subtitleColor;
+  Color errorColor;
+  Color recordingDotColor;
+  Color waveformUnplayedColor;
+  BorderRadius borderRadius;
+  TextStyle? hintTextStyle;     // override font for "tap to record" hint
+  TextStyle? timerTextStyle;    // override font for mm:ss timer
+  TextStyle? badgeTextStyle;    // override font for "Paused" badge
+  TextStyle? buttonLabelStyle;  // override font for Resume / Send buttons
 }
 ```
+
+All `TextStyle?` fields are merged onto sensible base styles — pass only what you need (e.g. `TextStyle(fontFamily: 'Inter')`).
+
+If your app *does* use Material `Theme`, pull values yourself at the call site:
+
+```dart
+final cs = Theme.of(context).colorScheme;
+VoiceMessageBubble(
+  message: msg,
+  style: VoiceBubbleStyle(
+    bubbleColor: cs.primaryContainer,
+    primaryColor: cs.primary,
+    onPrimaryColor: cs.onPrimary,
+    waveformUnplayedColor: cs.outlineVariant,
+    textColor: cs.onPrimaryContainer,
+    subtitleColor: cs.onPrimaryContainer.withAlpha(160),
+    errorColor: cs.error,
+  ),
+);
+```
+
+### `VoiceMessage`
+
+```dart
+class VoiceMessage {
+  final AudioSource source;   // sealed: LocalAudioSource | RemoteAudioSource
+  final Duration duration;
+  final Waveform waveform;    // immutable, 0..1 clamped
+  final DateTime sentAt;
+}
+
+// Factories
+VoiceMessage.local(path: ..., duration: ..., waveform: ...);
+VoiceMessage.remote(url: ..., duration: ..., waveform: ...);
+```
+
+`Waveform` is a value object. Pass server-computed bars straight through — the bubble will use them instead of re-extracting on download (saves an FFmpeg pass).
 
 ---
 
@@ -180,6 +307,29 @@ Invariants:
 - Entering `recording` from `paused` or `previewing` always tears down the preview player first.
 - The merged preview file is regenerated on every `listen` tap (a new segment may have been added since the last preview).
 - `WidgetsBindingObserver` auto-pauses recording on `AppLifecycleState.paused` so backgrounding never corrupts a segment.
+
+### Bubble state machine (per message)
+
+```
+        ┌─ LocalAudioSource ──────────────────────────────▶ Ready
+        │
+init ───┤
+        │                            cache hit
+        └─ RemoteAudioSource ────────────────────────────▶ Ready
+                  │
+                  │ cache miss
+                  ▼
+                Idle ── tap download ──▶ Downloading ──┬─▶ Ready
+                  ▲                          │         │
+                  │                          │ cancel  │ error
+                  └──────────────────────────┘         ▼
+                                                     Error
+                                                       │ retry
+                                                       ▼
+                                                  Downloading
+```
+
+`BubbleState` is a sealed class — every state carries the data it needs (e.g. `BubbleDownloading.progress`) and the bubble UI matches with an exhaustive `switch`.
 
 ### Segment-based M4A pipeline
 
@@ -222,7 +372,7 @@ This gives a consistent waveform regardless of which audio player is used.
 
 ### Waveform cache
 
-`WaveformCacheService` is a singleton backed by `.waveform_cache.json` in the app documents directory. Waveform data is keyed by file path and loaded lazily on first use.
+`JsonFileWaveformCache` backs `.waveform_cache.json` in the app documents directory. Waveform data is keyed by file path and loaded lazily on first use.
 
 ```
 send message
@@ -230,32 +380,64 @@ send message
     └─ sent directly   → extract now, then cache
 
 open bubble
-    ├─ VoiceRecordingResult.waveformData present → use directly
+    ├─ VoiceMessage.waveform already populated   → use directly (server metadata)
     ├─ found in JSON cache                       → use from disk
     └─ not found                                 → extract + cache
 ```
 
-### Module boundaries
+### Network audio cache (cached_network_image style)
+
+Remote audio uses on-disk caching keyed by a sha1 hash of the URL — no JSON index, no SQLite. File existence on disk *is* the cache.
+
+```
+tap download
+    ├─ cache.getIfCached(url) → file exists? → go straight to Ready
+    └─ else → dio.download(url, "<finalPath>.part", onReceiveProgress: …)
+              ├─ success → rename .part → finalPath → Ready
+              ├─ cancel  → delete .part → Idle
+              └─ error   → delete .part → Error (retry)
+```
+
+Restarting the app does not lose the cache: `voice_cache/<sha1>.<ext>` survives. The bubble auto-detects this on first build and skips straight to the play state.
+
+### Module boundaries (ports & adapters)
 
 ```
 lib/
-  models/
-    voice_recording_result.dart          data class emitted on send
-  services/
-    recorder_permission.dart             mic permission flow
-    voice_recorder_service.dart          wraps `record` — start/stop segment
-    audio_concat_service.dart            wraps FFmpeg — concat demuxer
-    waveform_extractor_service.dart      FFmpeg PCM → RMS → List<double>
-    waveform_cache_service.dart          disk-backed waveform cache
-  controllers/
-    voice_recorder_controller.dart       ChangeNotifier orchestrating state
-  widgets/
-    voice_recorder_widget.dart           recorder UI (public API)
-    voice_message_bubble.dart            playable chat bubble (public API)
-    _recording_timer.dart                mm:ss with tabular figures
-    _live_amplitude_bar.dart             ring-buffer CustomPainter
-    _preview_waveform_player.dart        StatelessWidget waveform + seek
+  domain/                  pure Dart — no Flutter, no I/O
+    audio_source.dart        sealed: LocalAudioSource | RemoteAudioSource
+    voice_message.dart       VoiceMessage entity + factories
+    waveform.dart            value object, clamps to 0..1
+    recorder_failure.dart    sealed RecorderFailure hierarchy
+    recorder_config.dart     bit rate, sample count, amplitude floor, …
+  application/             controllers + abstract ports
+    ports.dart                 every dependency surfaced as `abstract interface class`
+    recording_controller.dart  ChangeNotifier orchestrating idle/recording/paused/previewing
+    preview_playback_controller.dart  AudioPlayer lifecycle for the mid-recording preview
+    voice_message_playback_controller.dart  per-bubble: download + play state machine
+    playback_coordinator.dart  identity-based "only one speaker at a time"
+  infrastructure/          concrete adapters (the only place that touches I/O)
+    audio_recorder_record.dart       record package adapter
+    audio_concat_ffmpeg.dart         FFmpeg concat demuxer
+    waveform_extractor_ffmpeg.dart   FFmpeg → PCM → RMS → Waveform
+    waveform_cache_json.dart         on-disk JSON map
+    voice_message_cache_fs.dart      sha1(url) → file on disk
+    voice_message_downloader_dio.dart dio download with progress + cancel
+    mic_permission_handler.dart      permission_handler adapter
+    voice_paths.dart                 path_provider-backed paths
+    ffmpeg_runner.dart               shared FFmpegKit helper (DRY)
+  presentation/            Flutter widgets + DI scope
+    app_dependencies.dart    AppDependencies + InheritedWidget
+    chat_page.dart           demo screen
+    voice_recorder_widget.dart  recorder UI (consumes RecordingController)
+    voice_message_bubble.dart   chat bubble UI (consumes VoiceMessagePlaybackController)
+    widgets/
+      recording_timer.dart   mm:ss with tabular figures
+      live_amplitude_bar.dart ring-buffer CustomPainter
+      waveform_player.dart    waveform + seek CustomPainter
 ```
+
+The dependency direction is strict: `presentation → application → domain`, and `infrastructure → application → domain`. Nothing in `domain/` imports Flutter or any plugin — the same files compile under pure-Dart unit tests.
 
 ---
 
@@ -274,8 +456,9 @@ lib/
 
 - **FFmpeg binary size.** `ffmpeg_kit_flutter_new` adds ~15 MB to release builds. An audio-only subspec can reduce this; concat only needs AAC muxer/demuxer support.
 - **No swipe-to-cancel gesture.** Mic is tap-to-toggle. Swipe-to-cancel can be added with a `GestureDetector` around the idle mic button.
-- **No network upload.** The widget emits a file path. Uploading is intentionally out of scope.
-- **In-memory message list.** The demo app stores messages in a `List` — they are lost on restart. A real app would persist them to a local database.
+- **No upload pipeline.** The widget emits a `VoiceMessage` with a local file path; uploading to a backend is intentionally out of scope.
+- **In-memory message list.** The demo app stores messages in a `List` — they are lost on restart. The on-disk audio cache and waveform cache *do* survive, so wiring up a local DB (drift, sqflite, isar) for the message list is a small, isolated addition.
+- **No cache eviction policy.** Downloaded files stay in `voice_cache/` forever. Add an LRU sweeper if footprint matters.
 - **Emulator microphones** on both platforms are unreliable. Test on a real device.
 
 ---

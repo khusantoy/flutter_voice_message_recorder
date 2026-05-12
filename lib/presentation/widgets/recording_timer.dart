@@ -1,13 +1,15 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
 class RecordingTimer extends StatelessWidget {
   const RecordingTimer({
     super.key,
     required this.duration,
+    required this.color,
     this.style,
   });
 
   final Duration duration;
+  final Color color;
   final TextStyle? style;
 
   @override
@@ -15,14 +17,14 @@ class RecordingTimer extends StatelessWidget {
     final totalSeconds = duration.inSeconds;
     final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
     final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
-    final theme = Theme.of(context);
     return Text(
       '$minutes:$seconds',
-      style: style ??
-          theme.textTheme.titleMedium?.copyWith(
-            fontFeatures: const [FontFeature.tabularFigures()],
-            color: theme.colorScheme.onSurface,
-          ),
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: color,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ).merge(style),
     );
   }
 }

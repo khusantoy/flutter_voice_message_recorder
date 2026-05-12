@@ -1,17 +1,19 @@
 import 'dart:collection';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
 class LiveAmplitudeBar extends StatefulWidget {
   const LiveAmplitudeBar({
     super.key,
     required this.amplitude,
     required this.isActive,
+    required this.color,
     this.height = 40,
   });
 
   final double amplitude;
   final bool isActive;
+  final Color color;
   final double height;
 
   @override
@@ -31,8 +33,12 @@ class _LiveAmplitudeBarState extends State<LiveAmplitudeBar> {
   void _syncBuffer(int count) {
     if (count == _barCount) return;
     _barCount = count;
-    while (_buffer.length > count) { _buffer.removeFirst(); }
-    while (_buffer.length < count) { _buffer.addFirst(0.0); }
+    while (_buffer.length > count) {
+      _buffer.removeFirst();
+    }
+    while (_buffer.length < count) {
+      _buffer.addFirst(0.0);
+    }
   }
 
   @override
@@ -51,17 +57,13 @@ class _LiveAmplitudeBarState extends State<LiveAmplitudeBar> {
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.primary;
     return LayoutBuilder(
       builder: (context, constraints) {
         _syncBuffer(_computeCount(constraints.maxWidth));
         return SizedBox(
           height: widget.height,
           child: CustomPaint(
-            painter: _AmpPainter(
-              values: _buffer.toList(),
-              color: color,
-            ),
+            painter: _AmpPainter(values: _buffer.toList(), color: widget.color),
             size: Size.infinite,
           ),
         );

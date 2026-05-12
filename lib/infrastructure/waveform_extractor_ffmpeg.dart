@@ -2,31 +2,32 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 
-class WaveformExtractorService {
-  Future<List<double>> extract(String audioPath, {int sampleCount = 100}) async {
+import '../application/ports.dart';
+import '../domain/waveform.dart';
+import 'ffmpeg_runner.dart';
+
+class FfmpegWaveformExtractor implements WaveformExtractorPort {
+  FfmpegWaveformExtractor({FfmpegRunner? runner})
+      : _runner = runner ?? const FfmpegRunner();
+
+  final FfmpegRunner _runner;
+
+  @override
+  Future<Waveform> extract(String audioPath, {required int sampleCount}) async {
     final tmpDir = await getTemporaryDirectory();
     final pcmPath =
         '${tmpDir.path}/waveform_${DateTime.now().microsecondsSinceEpoch}.raw';
 
-    final cmd = '-y -i "$audioPath" -ac 1 -ar 8000 -f s16le "$pcmPath"';
-    final session = await FFmpegKit.execute(cmd);
-    final rc = await session.getReturnCode();
-
-    if (!ReturnCode.isSuccess(rc)) {
-      final logs = await session.getAllLogsAsString();
-      throw Exception('waveform extraction failed (rc=${rc?.getValue()}): $logs');
-    }
+    await _runner.run('-y -i "$audioPath" -ac 1 -ar 8000 -f s16le "$pcmPath"');
 
     final bytes = await File(pcmPath).readAsBytes();
     try {
       await File(pcmPath).delete();
     } catch (_) {}
 
-    if (bytes.isEmpty) return List.filled(sampleCount, 0.0);
+    if (bytes.isEmpty) return Waveform.flat(sampleCount);
 
     final data = bytes.buffer.asByteData();
     final totalSamples = bytes.length ~/ 2;
@@ -49,8 +50,8 @@ class WaveformExtractorService {
     }
 
     final maxRms = rms.reduce(max);
-    if (maxRms == 0) return List.filled(sampleCount, 0.0);
+    if (maxRms == 0) return Waveform.flat(sampleCount);
 
-    return rms.map((v) => sqrt(v / maxRms)).toList();
+    return Waveform(rms.map((v) => sqrt(v / maxRms)).toList());
   }
 }

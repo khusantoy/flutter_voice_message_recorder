@@ -3,27 +3,33 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-class WaveformCacheService {
-  WaveformCacheService._();
-  static final WaveformCacheService instance = WaveformCacheService._();
+import '../application/ports.dart';
+import '../domain/waveform.dart';
+
+class JsonFileWaveformCache implements WaveformCachePort {
+  JsonFileWaveformCache();
 
   Map<String, List<double>>? _cache;
   File? _file;
 
-  Future<List<double>?> get(String filePath) async {
+  @override
+  Future<Waveform?> get(String key) async {
     await _ensureLoaded();
-    return _cache![filePath];
+    final raw = _cache![key];
+    return raw == null ? null : Waveform(raw);
   }
 
-  Future<void> set(String filePath, List<double> data) async {
+  @override
+  Future<void> set(String key, Waveform waveform) async {
     await _ensureLoaded();
-    _cache![filePath] = data;
+    _cache![key] = List<double>.from(waveform.samples);
     await _persist();
   }
 
-  Future<void> remove(String filePath) async {
+  @override
+  Future<void> remove(String key) async {
     await _ensureLoaded();
-    if (_cache!.remove(filePath) != null) await _persist();
+    if (_cache!.remove(key) != null) await _persist();
   }
 
   Future<void> _ensureLoaded() async {
@@ -35,7 +41,10 @@ class WaveformCacheService {
       if (await _file!.exists()) {
         final raw = jsonDecode(await _file!.readAsString()) as Map<String, dynamic>;
         _cache = raw.map(
-          (k, v) => MapEntry(k, (v as List).map((e) => (e as num).toDouble()).toList()),
+          (k, v) => MapEntry(
+            k,
+            (v as List).map((e) => (e as num).toDouble()).toList(),
+          ),
         );
       }
     } catch (_) {}

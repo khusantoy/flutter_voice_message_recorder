@@ -1,22 +1,27 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 
-class PreviewWaveformPlayer extends StatelessWidget {
-  const PreviewWaveformPlayer({
+import '../../domain/waveform.dart';
+
+class WaveformPlayer extends StatelessWidget {
+  const WaveformPlayer({
     super.key,
-    required this.waveformData,
+    required this.waveform,
     required this.progress,
     required this.onSeek,
+    required this.playedColor,
+    required this.unplayedColor,
     this.height = 40,
   });
 
-  final List<double> waveformData;
+  final Waveform waveform;
   final double progress;
   final ValueChanged<double> onSeek;
+  final Color playedColor;
+  final Color unplayedColor;
   final double height;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
@@ -30,10 +35,10 @@ class PreviewWaveformPlayer extends StatelessWidget {
             height: height,
             child: CustomPaint(
               painter: _WaveformPainter(
-                samples: waveformData,
+                samples: waveform.samples,
                 progress: progress,
-                playedColor: cs.primary,
-                unplayedColor: cs.outlineVariant,
+                playedColor: playedColor,
+                unplayedColor: unplayedColor,
               ),
             ),
           ),
